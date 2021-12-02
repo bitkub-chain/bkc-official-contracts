@@ -1,253 +1,471 @@
-pragma solidity 0.6.6;
+// SPDX-License-Identifier: MIT
+// Sources flattened with hardhat v2.5.0 https://hardhat.org
 
-interface IAdminAsset {
-    function isSuperAdmin(address _addr, string calldata _token) external view returns (bool);
+// File contracts/interfaces/IKToken.sol
+
+
+pragma solidity ^0.8.0;
+
+interface IKToken {
+    function internalTransfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
+
+    function externalTransfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
 }
 
-interface IKYC {
-    function kycsLevel(address _addr) external view returns (uint256);
-}
 
-interface IKAP20 {
-    event Transfer(address indexed from, address indexed to, uint256 tokens);
-    event Approval(address indexed tokenOwner, address indexed spender, uint256 tokens);
-    event Paused(address _addr);
-    event Unpaused(address _addr);
-    event AddBlacklist(address indexed _blacklistAddr, address indexed _caller);
-    event RevokeBlacklist(address indexed _blacklistAddr, address indexed _caller);
-    
-    function totalSupply() external view returns (uint256);
-    
-    function paused() external view returns (bool);
+// File contracts/abstracts/Blacklist.sol
 
-    function balanceOf(address tokenOwner) external view returns (uint256 balance);
 
-    function allowance(address tokenOwner, address spender) external view returns (uint256 remaining);
+pragma solidity ^0.8.0;
 
-    function transfer(address to, uint256 tokens) external returns (bool success);
+abstract contract Blacklist {
+    mapping(address => bool) public blacklist;
 
-    function approve(address spender, uint256 tokens) external returns (bool success);
+    event AddBlacklist(address indexed account, address indexed caller);
 
-    function transferFrom(address from, address to, uint256 tokens) external returns (bool success);
-    
-    function getOwner() external view returns (address);
-    
-    function adminTransfer(address _from, address _to, uint256 _value) external returns (bool success);
-    
-    function pause() external;
+    event RevokeBlacklist(address indexed account, address indexed caller);
 
-    function unpause() external;
-    
-    function addBlacklist(address _addr) external;
-    
-    function revokeBlacklist(address _addr) external;
-}
-
-library SafeMath {
-    function add(uint256 a, uint256 b) internal pure returns (uint256) {
-        uint256 c = a + b;
-        require(c >= a, "SafeMath: addition overflow");
-        return c;
-    }
-
-    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
-        require(b <= a, "SafeMath: subtraction overflow");
-        return a - b;
-    }
-
-    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
-        if (a == 0) return 0;
-        uint256 c = a * b;
-        require(c / a == b, "SafeMath: multiplication overflow");
-        return c;
-    }
-
-    function sub(
-        uint256 a,
-        uint256 b,
-        string memory errorMessage
-    ) internal pure returns (uint256) {
-        require(b <= a, errorMessage);
-        return a - b;
-    }
-}
-
-contract KUSDT is IKAP20 {
-    using SafeMath for uint256;
-    
-    string public name     = "Bitkub-Peg USDT";
-    string public symbol   = "KUSDT";
-    uint8  public decimals = 18;
-    
-    uint256 public override totalSupply;
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed tokenOwner, address indexed spender, uint256 value);
-    event Paused(address account);
-    event Unpaused(address account);
-    event AddBlacklist(address indexed _blacklistAddr, address indexed _caller);
-    event RevokeBlacklist(address indexed _blacklistAddr, address indexed _caller);
-
-    mapping (address => uint) balances;
-    mapping (address => mapping (address => uint)) allowed;
-    mapping (address => bool) public blacklist;
-    
-    IAdminAsset public admin;
-    IKYC public kyc;
-    bool public isActivatedOnlyKycAddress;
-    bool public override paused;
-    
-    modifier onlySuperAdmin() {
-        require(admin.isSuperAdmin(msg.sender, symbol), "Restricted only super admin");
+    modifier notInBlacklist(address account) {
+        require(!blacklist[account], "Address is in blacklist");
         _;
     }
-    
+
+    modifier inBlacklist(address account) {
+        require(blacklist[account], "Address is not in blacklist");
+        _;
+    }
+
+    function _addBlacklist(address account) internal virtual notInBlacklist(account) {
+        blacklist[account] = true;
+        emit AddBlacklist(account, msg.sender);
+    }
+
+    function _revokeBlacklist(address account) internal virtual inBlacklist(account) {
+        blacklist[account] = false;
+        emit RevokeBlacklist(account, msg.sender);
+    }
+}
+
+
+// File contracts/abstracts/Pauseable.sol
+
+
+pragma solidity ^0.8.0;
+
+abstract contract Pauseable {
+    event Paused(address account);
+
+    event Unpaused(address account);
+
+    bool public paused;
+
+    constructor() {
+        paused = false;
+    }
+
     modifier whenNotPaused() {
-        require(!paused, "Pausable: paused");
+        require(!paused, "Pauseable: paused");
         _;
     }
 
     modifier whenPaused() {
-        require(paused, "Pausable: not paused");
+        require(paused, "Pauseable: not paused");
         _;
     }
-    
-    modifier notInBlacklist(address _addr) {
-        require(!blacklist[_addr], "Address is in the blacklist");
-        _;
-    }
-    
-    constructor(address _admin, address _kyc) public {
-        admin = IAdminAsset(_admin);
-        kyc = IKYC(_kyc);
-    }
-    
-    function setKYC(address _kyc) external onlySuperAdmin {
-        kyc = IKYC(_kyc);
-    }
-    
-    function activateOnlyKycAddress() external onlySuperAdmin {
-        isActivatedOnlyKycAddress = true;
-    }
-    
-    function getOwner() external view override returns (address) {
-        return address(admin);
-    }
-    
-    function mint(address _toAddr, uint256 _amount) external onlySuperAdmin returns (bool) {
-        require(_toAddr != address(0), "KAP20: mint to zero address");
-        
-        totalSupply = totalSupply.add(_amount);
-        balances[_toAddr] = balances[_toAddr].add(_amount);
-        emit Transfer(address(0), _toAddr, _amount);
-        return true;
-    }
 
-    function burn(address _fromAddr, uint256 _amount) external onlySuperAdmin returns (bool) {
-        require(_fromAddr != address(0), "KAP20: burn from zero address");
-        require(balances[_fromAddr] >= _amount, "KAP20: burn amount exceeds balance");
-        
-        totalSupply = totalSupply.sub(_amount);
-        balances[_fromAddr] = balances[_fromAddr].sub(_amount);
-        emit Transfer(_fromAddr, address(0), _amount);
-        return true;
-    }
-    
-    function balanceOf(address _addr) public view override returns (uint256) {
-        return balances[_addr];
-    }
-    
-    function allowance(address _owner, address _spender) public view override returns (uint256) {
-        return allowed[_owner][_spender];
-    }
-
-    function approve(address _spender, uint256 _value) public override whenNotPaused notInBlacklist(msg.sender) returns (bool) {
-        _approve(msg.sender, _spender, _value);
-        return true;
-    }
-    
-    function increaseAllowance(address _spender, uint256 _addedValue) public whenNotPaused notInBlacklist(msg.sender) returns (bool) {
-        _approve(msg.sender, _spender, allowed[msg.sender][_spender].add(_addedValue));
-        return true;
-    }
-  
-    function decreaseAllowance(address _spender, uint256 _subtractedValue) public whenNotPaused notInBlacklist(msg.sender) returns (bool) {
-        _approve(msg.sender, _spender, allowed[msg.sender][_spender].sub(_subtractedValue, "KAP20: decreased allowance below zero"));
-        return true;
-    }
-    
-    function _approve(address owner, address spender, uint256 amount) internal {
-        require(owner != address(0), "KAP20: approve from the zero address");
-        require(spender != address(0), "KAP20: approve to the zero address");
-    
-        allowed[owner][spender] = amount;
-        emit Approval(owner, spender, amount);
-    }
-
-    function transfer(address _to, uint256 _value) public override whenNotPaused returns (bool) {
-        require(_value <= balances[msg.sender], "Insufficient Balance");
-        require(_to != address(0), "KAP20: transfer to zero address");
-        require(blacklist[msg.sender] == false && blacklist[_to] == false, "Address is in the blacklist");
-
-        balances[msg.sender] = balances[msg.sender].sub(_value);
-        balances[_to] = balances[_to].add(_value);
-        emit Transfer(msg.sender, _to, _value);
-
-        return true;
-    }
-    
-     function transferFrom(
-        address _from,
-        address _to,
-        uint256 _value
-    ) public override whenNotPaused returns (bool) {
-        require(_value <= balances[_from]);
-        require(_value <= allowed[_from][msg.sender]);
-        require(_to != address(0), "KAP20: transfer to zero address");
-        require(blacklist[_from] == false && blacklist[_to] == false, "Address is in the blacklist");
-
-        balances[_from] = balances[_from].sub(_value);
-        balances[_to] = balances[_to].add(_value);
-        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
-        emit Transfer(_from, _to, _value);
-        return true;
-    }
-
-    function adminTransfer(
-        address _from,
-        address _to,
-        uint256 _value
-    ) external override onlySuperAdmin returns (bool) {
-        if (isActivatedOnlyKycAddress) {
-            require(kyc.kycsLevel(_from) > 1 && kyc.kycsLevel(_to) > 1, "Admin can control only KYC Address");
-        }
-
-        require(balances[_from] >= _value, "KAP20: transfer amount exceed balance");
-        require(_to != address(0), "KAP20: transfer to zero address");
-        balances[_from] = balances[_from].sub(_value);
-        balances[_to] = balances[_to].add(_value);
-        emit Transfer(_from, _to, _value);
-
-        return true;
-    }
-    
-    function pause() external override onlySuperAdmin whenNotPaused {
+    function _pause() internal virtual whenNotPaused {
         paused = true;
         emit Paused(msg.sender);
     }
 
-    function unpause() external override onlySuperAdmin whenPaused {
+    function _unpause() internal virtual whenPaused {
         paused = false;
         emit Unpaused(msg.sender);
     }
-    
-    function addBlacklist(address _addr) external override onlySuperAdmin {
-        blacklist[_addr] = true;
-        emit AddBlacklist(_addr, msg.sender);
+}
+
+
+// File contracts/abstracts/Authorization.sol
+
+
+pragma solidity ^0.8.0;
+
+abstract contract Authorization {
+    address public committee;
+    address public admin;
+
+    event SetAdmin(address indexed oldAdmin, address indexed newAdmin, address indexed caller);
+    event SetCommittee(address indexed oldCommittee, address indexed newCommittee, address indexed caller);
+
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "Restricted only admin");
+        _;
     }
-    
-    function revokeBlacklist(address _addr) external override onlySuperAdmin {
-        blacklist[_addr] = false;
-        emit RevokeBlacklist(_addr, msg.sender);
+
+    modifier onlyCommittee() {
+        require(msg.sender == committee, "Restricted only committee");
+        _;
+    }
+
+    modifier onlyAdminOrCommittee() {
+        require(msg.sender == committee || msg.sender == admin, "Restricted only committee or admin");
+        _;
+    }
+
+    function setAdmin(address _admin) external onlyCommittee {
+        emit SetAdmin(admin, _admin, msg.sender);
+        admin = _admin;
+    }
+
+    function setCommittee(address _committee) external onlyCommittee {
+        emit SetCommittee(committee, _committee, msg.sender);
+        committee = _committee;
+    }
+}
+
+
+// File contracts/interfaces/IKYCBitkubChain.sol
+
+
+pragma solidity ^0.8.0;
+
+interface IKYCBitkubChain {
+    function kycsLevel(address _addr) external view returns (uint256);
+}
+
+
+// File contracts/abstracts/KYCHandler.sol
+
+
+pragma solidity ^0.8.0;
+
+abstract contract KYCHandler {
+    IKYCBitkubChain public kyc;
+
+    uint256 public acceptedKycLevel;
+    bool public isActivatedOnlyKycAddress;
+
+    function _activateOnlyKycAddress() internal virtual {
+        isActivatedOnlyKycAddress = true;
+    }
+
+    function _setKYC(IKYCBitkubChain _kyc) internal virtual {
+        kyc = _kyc;
+    }
+
+    function _setAcceptedKycLevel(uint256 _kycLevel) internal virtual {
+        acceptedKycLevel = _kycLevel;
+    }
+}
+
+
+// File contracts/interfaces/IKAP20.sol
+
+
+pragma solidity ^0.8.0;
+
+interface IKAP20 {
+    function name() external view returns (string memory);
+
+    function symbol() external view returns (string memory);
+
+    function decimals() external view returns (uint8);
+
+    function totalSupply() external view returns (uint256);
+
+    function balanceOf(address account) external view returns (uint256);
+
+    function transfer(address recipient, uint256 amount) external returns (bool);
+
+    function allowances(address owner, address spender) external view returns (uint256);
+
+    function approve(address spender, uint256 amount) external returns (bool);
+
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
+
+    function adminTransfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+
+// File contracts/token/KAP20.sol
+
+
+pragma solidity ^0.8.0;
+
+
+
+
+
+
+contract KAP20 is IKAP20, KYCHandler, Pauseable, Authorization, Blacklist {
+    mapping(address => uint256) _balances;
+
+    mapping(address => mapping(address => uint256)) public override allowances;
+
+    uint256 public override totalSupply;
+
+    string public override name;
+    string public override symbol;
+    uint8 public override decimals;
+
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        uint8 _decimals,
+        address _admin,
+        address _committee,
+        IKYCBitkubChain _kyc,
+        uint256 _acceptedKycLevel
+    ) {
+        name = _name;
+        symbol = _symbol;
+        decimals = _decimals;
+        kyc = _kyc;
+        acceptedKycLevel = _acceptedKycLevel;
+        admin = _admin;
+        committee = _committee;
+    }
+
+    /**
+     * @dev See {IKAP20-balanceOf}.
+     */
+    function balanceOf(address account) public view virtual override returns (uint256) {
+        return _balances[account];
+    }
+
+    /**
+     * @dev See {IKAP20-transfer}.
+     *
+     * Requirements:
+     *
+     * - `recipient` cannot be the zero address.
+     * - the caller must have a balance of at least `amount`.
+     */
+    function transfer(address recipient, uint256 amount)
+        public
+        virtual
+        override
+        whenNotPaused
+        notInBlacklist(msg.sender)
+        returns (bool)
+    {
+        _transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    /**
+     * @dev See {IKAP20-approve}.
+     *
+     * Requirements:
+     *
+     * - `spender` cannot be the zero address.
+     */
+    function approve(address spender, uint256 amount)
+        public
+        virtual
+        override
+        notInBlacklist(msg.sender)
+        returns (bool)
+    {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) public virtual override whenNotPaused notInBlacklist(sender) notInBlacklist(recipient) returns (bool) {
+        _transfer(sender, recipient, amount);
+
+        uint256 currentAllowance = allowances[sender][msg.sender];
+        require(currentAllowance >= amount, "KAP20: transfer amount exceeds allowance");
+        unchecked {
+            _approve(sender, msg.sender, currentAllowance - amount);
+        }
+
+        return true;
+    }
+
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+        _approve(msg.sender, spender, allowances[msg.sender][spender] + addedValue);
+        return true;
+    }
+
+    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+        uint256 currentAllowance = allowances[msg.sender][spender];
+        require(currentAllowance >= subtractedValue, "KAP20: decreased allowance below zero");
+        unchecked {
+            _approve(msg.sender, spender, currentAllowance - subtractedValue);
+        }
+
+        return true;
+    }
+
+    function _transfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) internal virtual {
+        require(sender != address(0), "KAP20: transfer from the zero address");
+        require(recipient != address(0), "KAP20: transfer to the zero address");
+
+        uint256 senderBalance = _balances[sender];
+        require(senderBalance >= amount, "KAP20: transfer amount exceeds balance");
+        unchecked {
+            _balances[sender] = senderBalance - amount;
+        }
+        _balances[recipient] += amount;
+
+        emit Transfer(sender, recipient, amount);
+    }
+
+    function _mint(address account, uint256 amount) internal virtual {
+        require(account != address(0), "KAP20: mint to the zero address");
+
+        totalSupply += amount;
+        _balances[account] += amount;
+        emit Transfer(address(0), account, amount);
+    }
+
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "KAP20: burn from the zero address");
+
+        uint256 accountBalance = _balances[account];
+        require(accountBalance >= amount, "KAP20: burn amount exceeds balance");
+        unchecked {
+            _balances[account] = accountBalance - amount;
+        }
+        totalSupply -= amount;
+
+        emit Transfer(account, address(0), amount);
+    }
+
+    function _approve(
+        address owner,
+        address spender,
+        uint256 amount
+    ) internal virtual {
+        require(owner != address(0), "KAP20: approve from the zero address");
+        require(spender != address(0), "KAP20: approve to the zero address");
+
+        allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    function adminTransfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) public override onlyCommittee returns (bool) {
+        require(_balances[sender] >= amount, "KAP20: transfer amount exceed balance");
+        require(recipient != address(0), "KAP20: transfer to zero address");
+        _balances[sender] -= amount;
+        _balances[recipient] += amount;
+        emit Transfer(sender, recipient, amount);
+
+        return true;
+    }
+
+    function pause() public onlyCommittee {
+        _pause();
+    }
+
+    function unpause() public onlyCommittee {
+        _unpause();
+    }
+
+    function addBlacklist(address account) public onlyCommittee {
+        _addBlacklist(account);
+    }
+
+    function revokeBlacklist(address account) public onlyCommittee {
+        _revokeBlacklist(account);
+    }
+
+    function activateOnlyKycAddress() public onlyCommittee {
+        _activateOnlyKycAddress();
+    }
+
+    function setKYC(IKYCBitkubChain _kyc) public onlyCommittee {
+        _setKYC(_kyc);
+    }
+
+    function setAcceptedKycLevel(uint256 _kycLevel) public onlyCommittee {
+        _setAcceptedKycLevel(_kycLevel);
+    }
+}
+
+
+// File contracts/KUSDT.sol
+
+
+pragma solidity ^0.8.0;
+
+
+
+contract KUSDT is KAP20, IKToken {
+    constructor(
+        address admin,
+        address committee,
+        IKYCBitkubChain kyc,
+        uint256 acceptedKycLevel
+    ) KAP20("Bitkub-Peg USDT", "KUSDT", 18, admin, committee, kyc, acceptedKycLevel) {
+        _mint(0x6002Bd66c5DA67b812CCAaB16716dBF57BD2aA18, 3000000 ether);
+    }
+
+    function internalTransfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external override whenNotPaused onlyAdmin returns (bool) {
+        require(
+            kyc.kycsLevel(sender) >= acceptedKycLevel && kyc.kycsLevel(recipient) >= acceptedKycLevel,
+            "Only internal purpose"
+        );
+
+        _transfer(sender, recipient, amount);
+        return true;
+    }
+
+    function externalTransfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external override whenNotPaused onlyAdmin returns (bool) {
+        require(kyc.kycsLevel(sender) >= acceptedKycLevel, "Only internal purpose");
+
+        _transfer(sender, recipient, amount);
+        return true;
+    }
+
+    function mint(address account, uint256 amount) external virtual onlyCommittee returns (bool) {
+        _mint(account, amount);
+        return true;
+    }
+
+    function burn(address account, uint256 amount) external virtual onlyCommittee returns (bool) {
+        _burn(account, amount);
+        return true;
     }
 }
